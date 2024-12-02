@@ -5,7 +5,7 @@ Risk Assessment PRO 101.109
 
 ## Overview
 
-This repository contains a **Risk Assessment** and **Training Software** designed to simulate and calculate trade risks using various financial models. It supports both risk analysis and training modes, where data is generated and used to calculate thresholds for different risk levels.
+This repository contains a **Risk Assessment** and **Training Software** designed to simulate and calculate trade risks using various financial models. It supports both risk analysis and training modes, where data is generated and used to calculate thresholds for different risk levels. Use the Training functionality to teach the program optimal thresholds.
 
 The program is designed to:
 - Simulate trade data using Monte Carlo simulations and other risk models.
@@ -22,6 +22,8 @@ The program is designed to:
 - **Abort Functionality**: Allow users to abort the training process at any time.
 - **RA.py Restart**: Automatically restart the main Risk Assessment software after training completion.
 - **User Interface**: Interactive interface using `Tkinter` for monitoring and controlling the training process.
+
+While this program does not define risk for you directly, it can help you set reference points and help you manage risk indirectly.
  
 
 If you enjoy this program, buy me a coffee https://buymeacoffee.com/siglabo
