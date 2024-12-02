@@ -25,6 +25,8 @@ The program is designed to:
 
 While this program does not define risk for you directly, it can help you set reference points and help you manage risk indirectly.
  
+![Screenshot 2024-12-02 014535](https://github.com/user-attachments/assets/3505b79b-6f6a-4875-affc-8913041716c4)
+![Screenshot 2024-12-02 014530](https://github.com/user-attachments/assets/c01fd6c7-979b-49ba-bb4d-4ac926b62048)
 
 If you enjoy this program, buy me a coffee https://buymeacoffee.com/siglabo
 You can use it free of charge or build upon my code. 
