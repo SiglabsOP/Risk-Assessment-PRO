@@ -1,25 +1,14 @@
 import random
 import pandas as pd
-import dask
-from dask import delayed
-from dask.distributed import Client, progress
-from multiprocessing import cpu_count, Manager
+
+from multiprocessing import cpu_count, Pool, Manager
 import time
-import tkinter as tk
-import sys
-from tkinter import messagebox, Tk, Button, Label, StringVar, Frame, ttk, scrolledtext
+from tkinter import messagebox, Tk, Button
 import json
 import threading
 import os
 import psutil
 import subprocess
-import logging
-from dask_tasks import generate_single_batch_dask
- 
- 
-print("Current directory:", os.getcwd())
-
- 
 from tqdm import tqdm
 from risk_calculations import (
     monte_carlo_risk_simulation,
@@ -30,17 +19,35 @@ from risk_calculations import (
 )
 
 # Flag to indicate if the process should be aborted
- 
-logging.basicConfig(level=logging.DEBUG)
+abort_training = False
 
- 
 
- 
-
-  
-def parallel_generate_training_data_with_dask(total_iterations, size_range, value_range, num_processes=None):
+def generate_single_batch(num_iterations, size_range, value_range, output_file):
     """
-    Generates training data in parallel using Dask delayed.
+    Generates a batch of training data, calculates risks, and saves intermediate results to disk.
+    """
+    results = []
+    for _ in tqdm(range(num_iterations), desc="Generating batches", ncols=100):
+        if abort_training:
+            break  # Exit if abort flag is set
+        trade_size = random.randint(*size_range)
+        trade_value = random.randint(*value_range)
+
+        monte_carlo = monte_carlo_risk_simulation(trade_size, trade_value)
+        var = value_at_risk(trade_value)
+        cvar = conditional_value_at_risk(trade_value)
+        risk_parity_value = risk_parity(trade_value)
+        final_risk = calculate_final_risk(monte_carlo, var, cvar, risk_parity_value)
+
+        results.append({"Final Risk": final_risk})
+
+    # Save intermediate results to disk
+    pd.DataFrame(results).to_csv(output_file, index=False)
+
+
+def parallel_generate_training_data(total_iterations, size_range, value_range, num_processes=None):
+    """
+    Generates training data in parallel using multiprocessing with intermediate file storage.
     """
     if num_processes is None:
         num_processes = cpu_count()  # Use all available CPU cores
@@ -48,42 +55,25 @@ def parallel_generate_training_data_with_dask(total_iterations, size_range, valu
     iterations_per_process = (total_iterations // num_processes) // 2  # Smaller batches
     temp_files = [f"temp_{i}.csv" for i in range(num_processes)]
 
-    # Initialize Dask client
-    client = Client()  # Start a local Dask cluster
-
-    try:
-        # Create Dask delayed tasks for parallel processing
+    with Pool(num_processes) as pool:
         tasks = [
-            delayed(generate_single_batch_dask)(iterations_per_process, size_range, value_range, temp_file)
+            pool.apply_async(
+                generate_single_batch,
+                args=(iterations_per_process, size_range, value_range, temp_file)
+            )
             for temp_file in temp_files
         ]
+        for task in tasks:
+            task.wait()  # Wait for all tasks to finish
 
-        # Compute all tasks (this will start the execution)
-        dask_results = client.compute(tasks)
+    # Combine intermediate results from all files
+    combined_data = pd.concat([pd.read_csv(temp_file) for temp_file in temp_files], ignore_index=True)
 
-        # Wait for all tasks to complete
-        progress(dask_results)
-
-        # Combine results from temporary files
-        combined_data = pd.concat(
-            [pd.read_csv(temp_file) for temp_file in temp_files if os.path.exists(temp_file)], 
-            ignore_index=True
-        )
-
-    except Exception as e:
-        print(f"Error during computation: {e}")
-        combined_data = None  # Handle gracefully
-
-    finally:
-        # Cleanup temporary files and close client
-        for temp_file in temp_files:
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-        client.close()
+    # Clean up temporary files
+    for temp_file in temp_files:
+        os.remove(temp_file)
 
     return combined_data
-
-
 
 
 def calculate_thresholds(results_df):
@@ -96,34 +86,37 @@ def calculate_thresholds(results_df):
         "High": results_df["Final Risk"].max()
     }
     return thresholds
- 
+
+
 def save_results(training_data, thresholds):
     """
     Save the generated training data and risk thresholds to files.
     """
     try:
-        logging.info("Saving training data to CSV...")
-        if training_data is not None:
-            training_data.to_csv("training_data.csv", index=False)
-            logging.info("Training data saved successfully.")
-        else:
-            logging.warning("No training data to save.")
+        print("Saving training data to CSV...")
+        training_data.to_csv("training_data.csv", index=False)
+        print("Training data saved successfully.")
     except Exception as e:
-        logging.error(f"Error saving training data to CSV: {e}")
+        print(f"Error saving training data to CSV: {e}")
 
     try:
-        logging.info("Saving thresholds to JSON...")
-        if thresholds:
-            thresholds = {key: float(value) for key, value in thresholds.items()}
-            with open("risk_thresholds.json", "w") as f:
-                json.dump(thresholds, f, indent=4)
-            logging.info("Thresholds saved successfully.")
-        else:
-            logging.warning("No thresholds to save.")
+        print("Saving thresholds to JSON...")
+        thresholds = {key: float(value) for key, value in thresholds.items()}
+        with open("risk_thresholds.json", "w") as f:
+            json.dump(thresholds, f, indent=4)
+        print("Thresholds saved successfully.")
     except Exception as e:
-        logging.error(f"Error saving thresholds: {e}")
+        print(f"Error saving thresholds: {e}")
 
- 
+
+def abort_training_process():
+    """
+    Set the flag to abort the training process.
+    """
+    global abort_training
+    abort_training = True
+    messagebox.showinfo("Training Aborted", "The training process has been aborted.")
+
 
 def estimate_time(iterations):
     """
@@ -134,6 +127,7 @@ def estimate_time(iterations):
     estimated_time = (iterations / benchmark_iterations) * benchmark_time
     minutes, seconds = divmod(estimated_time, 60)
     return f"{int(minutes)} minutes and {int(seconds)} seconds"
+
 
 def terminate_and_restart_ra_py():
     try:
@@ -159,102 +153,72 @@ def terminate_and_restart_ra_py():
     except Exception as e:
         print(f"Error terminating or restarting RA.py: {e}")
 
-class RedirectConsole:
-    """
-    Redirects console output to a Tkinter Text widget.
-    """
-    def __init__(self, text_widget):
-        self.text_widget = text_widget
 
-    def write(self, message):
-        self.text_widget.configure(state="normal")
-        self.text_widget.insert(tk.END, message)
-        self.text_widget.see(tk.END)  # Auto-scroll to the latest message
-        self.text_widget.configure(state="disabled")
+def main():
+    global abort_training
+    # Parameters
+    NUM_ITERATIONS = 24331296
+    SIZE_RANGE = (1, 1000)
+    VALUE_RANGE = (1, 50000)
 
-    def flush(self):
-        pass  # Required for compatibility with stdout
+    # Estimate training time
+    estimated_time = estimate_time(NUM_ITERATIONS)
 
-class TrainingGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Risk Training GUI")
-        self.create_widgets()
+    # Create a Tkinter window for user interaction
+    root = Tk()
+    root.withdraw()  # Hide the root window
 
-    def create_widgets(self):
-        # Main frame
-        frame = ttk.Frame(self.root, padding=10)
-        frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    # Create an "Abort" button
+    abort_button = Button(root, text="Abort Training", command=abort_training_process)
+    abort_button.pack()
 
-        # Output Text Area
-        self.output_console = scrolledtext.ScrolledText(frame, wrap=tk.WORD, height=15, width=80)
-        self.output_console.grid(row=0, column=0, columnspan=2, pady=(5, 10))
-        self.output_console.configure(state="disabled")  # Read-only by default
-        sys.stdout = RedirectConsole(self.output_console)  # Redirect stdout to GUI
+    # Warn the user about training duration
+    messagebox.showinfo(
+        "Training Mode",
+        f"Training will take approximately {estimated_time}. This is very CPU intensive. Please wait..."
+    )
 
-        # Progress Bar
-        self.progress_bar = ttk.Progressbar(frame, mode="indeterminate", length=400)
-        self.progress_bar.grid(row=1, column=0, columnspan=2, pady=(5, 10))
-        self.progress_bar.start()
+    # Start training in a separate thread to allow UI responsiveness
+    def training_thread():
+        global abort_training  # Use global instead of nonlocal
+        start_time = time.time()
+        print("Generating training data in parallel...")
 
-        # Exit Button
-        self.exit_button = ttk.Button(frame, text="Exit", command=self.exit_gui)
-        self.exit_button.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=5)
+        # Generate data in parallel
+        training_data = parallel_generate_training_data(NUM_ITERATIONS, SIZE_RANGE, VALUE_RANGE)
 
-    def exit_gui(self):
-        """
-        Gracefully exits the GUI without abrupt termination.
-        """
-        self.root.quit()
+        if abort_training:
+            return  # Stop if the process is aborted
 
+        # Calculate thresholds
+        print("Analyzing training data...")
+        thresholds = calculate_thresholds(training_data)
 
-def start_training():
-    """
-    Starts the training process in a thread-safe way.
-    """
-    try:
-        total_iterations = 24331296  # Example
-        size_range = (1, 100)  # Example
-        value_range = (1000, 10000)  # Example
-        num_processes = 4
+        # Save results
+        save_results(training_data, thresholds)
 
-        print(f"Starting training with {total_iterations} iterations...")
-
-        # Estimate time
-        estimated_time = estimate_time(total_iterations)
-        print(f"Estimated time for training: {estimated_time}")
-
-        # Perform training with Dask
-        training_data = parallel_generate_training_data_with_dask(
-            total_iterations, size_range, value_range, num_processes
+        elapsed_time = time.time() - start_time
+        messagebox.showinfo(
+            "Training Complete",
+            f"Training completed in {elapsed_time // 60:.0f} minutes and {elapsed_time % 60:.0f} seconds.\n"
+            f"Thresholds:\n"
+            f"Low Risk: Below {thresholds['Low']:.2f}\n"
+            f"Medium Risk: {thresholds['Low']:.2f} - {thresholds['Medium']:.2f}\n"
+            f"High Risk: Above {thresholds['Medium']:.2f}\n\n"
+            f"Training complete, rebooting RA Software... Please close older instances if needed."
         )
 
-        if training_data is not None:
-            thresholds = calculate_thresholds(training_data)
-            save_results(training_data, thresholds)
+        # Terminate and restart RA.py, then shut down the console
+        terminate_and_restart_ra_py()
+        print("Shutting down the console...")
+        os._exit(0)  # Terminate Python program immediately
 
-    except Exception as e:
-        print(f"Error during training: {e}")
-    finally:
-        # Cleanup progress bar and console state
-        print("Training process has ended.")
+    # Start the training thread
+    threading.Thread(target=training_thread).start()
 
-        
-def start_thread():
-    """
-    Start the training process in a separate thread to prevent freezing the GUI.
-    """
-    threading.Thread(target=start_training, daemon=True).start()
-        
-def main():
-    root = Tk()
-    training_gui = TrainingGUI(root)
-
-    # Start Training Button
-    start_button = ttk.Button(training_gui.root, text="Start Training", command=start_thread)
-    start_button.grid(row=3, column=0, pady=10)
-
+    # Run the Tkinter event loop to display the UI and respond to the abort button
     root.mainloop()
 
+
 if __name__ == "__main__":
-    main()
+    main()                  

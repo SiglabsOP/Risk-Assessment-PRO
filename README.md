@@ -13,6 +13,8 @@ The program is designed to:
 - Generate training data and calculate thresholds for **Low**, **Medium**, and **High** risk categories.
 - Operate efficiently with multi-core processors by utilizing parallel computation for training data generation.
 - Provide a user interface built with `Tkinter` to control and monitor the process.
+- the optional Training mode uses Dask and can hence handle large bulk datas. Let it run for an hour for extra accuracy, however it runs slow, it has GUI
+- the standard training mode is fast , you can adjust values if needed.
 
 ## Features
 
